@@ -19,6 +19,7 @@
 #define BME_MOSI 11
 #define BME_CS 10
 #define SEALEVELPRESSURE_HPA (1013.25)
+
 Adafruit_BME680 bme; // I2C
 
 /////////////////////////// LCD parameters ///////////////////////////
@@ -49,6 +50,9 @@ SdFat SD;
 // used for file writing purposes, not related to the realtime clock.
 int timeCounter;
 char truncate[64];
+// Used for data buffering
+double dataBuffer [2][4];
+
 /////////////////////////// Keypad parameters ///////////////////////////
 // our keypad has four rows and three columns. since this will never change
 // while the program is runniong, declare these as constants so that they 
@@ -278,6 +282,7 @@ void setup() {
   // set up the LCD's number of columns and rows, then print a message:
   lcd.begin(16, 2);
   LCD_message("LCD setup","");
+  Serial.println("LCD done");
 
   // delay a bit so I have time to see the display.
   delay(1000);
@@ -329,7 +334,7 @@ void setup() {
 
 /////////////////////////// DS3231 real time clock  setup /////////////////////////
   // turn on the RTC and check that it is talking to us.
-  if (! rtc.begin()) {
+  if (!rtc.begin()) {
     // uh oh, it's not talking to us.
     LCD_message("DS3231 RTC", "unresponsive");
     // delay 5 seconds so that user can read the display
@@ -360,13 +365,15 @@ void setup() {
                         GPS_hour, GPS_minutes, GPS_seconds));
   }
   now = rtc.now();
-  LCD_message("GPS setup done","");
+  LCD_message("RTC setup done","");
+  Serial.println("RTC done");
   delay(500);
   //end of clock set up  
 
 /////////////////////////// BME setup /////////////////////////
   if (!bme.begin()) {
     Serial.println("Could not find a valid BME680 sensor, check wiring!");
+    delay(100);
     exit(0);
   }
   // Set up oversampling and filter initialization
@@ -376,6 +383,8 @@ void setup() {
   bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
   bme.setGasHeater(320, 150); // 320*C for 150 ms
   LCD_message("BME setup done","");
+  Serial.println("BME done");
+
   delay(500);
   //end of BME setup
 
@@ -401,7 +410,7 @@ void setup() {
   }
 
   // open the new file then check that it opened properly.
-  myFile = SD.open(filename, FILE_WRITE);
+  myFile = SD.open(filename, O_CREAT | O_WRITE);
  
   if (myFile) {
     Serial.print("Writing to "); Serial.print(filename); Serial.println("...");
@@ -419,8 +428,8 @@ void setup() {
     delay(100);
   }
   startMillis = millis();
-  timeCounter = startMillis;
   LCD_message("Start","measurement");
+  Serial.println("measurement started");
   delay(500);
   //end of SD setup
 
@@ -433,6 +442,8 @@ void loop() {
   if (!bme.performReading()) {
     myFile.println("Failed to perform reading :(");
     Serial.println("Failed to perform reading :(");
+    LCD_message("BME","not working.");
+    myFile.close();
     exit(0);
   }
 
@@ -463,11 +474,21 @@ void loop() {
     }
   }
   // Write time data
-  myFile.print(rtc.now().hour()); myFile.print(',');
-  myFile.print(rtc.now().minute()); myFile.print(',');
-  myFile.print(rtc.now().second()); myFile.print(',');
-  myFile.println(currentMillis % 1000);
+  //myFile.println(currentMillis % 1000);
+  RTC_hour = rtc.now().hour();
+  RTC_minute = rtc.now().minute();
+  RTC_second = rtc.now().second();
+  myFile.print(RTC_hour); myFile.print(',');
+  myFile.print(RTC_minute); myFile.print(',');
+  myFile.print(RTC_second); myFile.print(',');
+  myFile.println(millis() % 1000);
+
+  //dataBuffer[0][0] = RTC_hour;
+  //dataBuffer[0][1] = RTC_minute;
+  //dataBuffer[0][2] = RTC_second;
+  //dataBuffer[0][3] = testInterval;
   //myFile.println(testInterval);
+  //myFile.flush();
 
   // Write BME data. temperature in °C, pressure in hPa, humidity in %, altitude in m
   myFile.print(bme.temperature);
@@ -476,8 +497,9 @@ void loop() {
   myFile.print(",");
   myFile.print(bme.humidity);
   myFile.print(",");
-  myFile.println(bme.readAltitude(SEALEVELPRESSURE_HPA));
+  //myFile.println(bme.readAltitude(SEALEVELPRESSURE_HPA));
   myFile.println();
+  //myFile.flush();
 
   // To stop recording data if * was pressed
   if (kpd.getKeys() && kpd.key[0].kstate == PRESSED) {
@@ -485,6 +507,7 @@ void loop() {
     if (the_key == '*') {
       Serial.println("Data acquisition stopped from keyboard");
       myFile.println("Data acquisition stopped from keyboard");
+      myFile.flush();
       myFile.close();
       LCD_message("Stopped", "from keyboard");
       delay(100);
