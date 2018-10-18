@@ -274,6 +274,8 @@ int GPS_satellites;
 String GPS_altitude_string;
 float GPS_altitude;
 int GPS_ready = -1;
+//end of GPS variables.
+
 void setup() {
   Serial.begin(115200);
   while (!Serial);
@@ -288,7 +290,7 @@ void setup() {
   delay(1000);
   
 ////////////////////////////////// GPS setup //////////////////////////////
-
+/*
   // If you want to see a detailed report of the GPS information, open a serial 
   // monitor window by going to the Tools -> Serial Monitor menu, then checking
   // the Autoscroll box at the bottom left of the window, and setting the baud rate
@@ -331,7 +333,7 @@ void setup() {
   Serial.println("GPS_ready");
   delay(100);
   // end of GPS setup
-
+*/
 /////////////////////////// DS3231 real time clock  setup /////////////////////////
   // turn on the RTC and check that it is talking to us.
   if (!rtc.begin()) {
