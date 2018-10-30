@@ -22,6 +22,13 @@
 
 Adafruit_BME680 bme; // I2C
 
+/////////////////////////// Anemometer Parameters ///////////////////////////
+const int analogInPin = A6;
+int sensorValue = 0;
+float sensorVoltage = 0.0;
+const float voltageConversionConstant = 0.004882814;
+float windSpeed;
+
 /////////////////////////// LCD parameters ///////////////////////////
 // The LCD is a GlobalFontz 16 x 2 device.
 // initialize the LCD library by associating LCD interface pins
@@ -50,8 +57,6 @@ SdFat SD;
 // used for file writing purposes, not related to the realtime clock.
 int timeCounter;
 char truncate[64];
-// Used for data buffering
-double dataBuffer [2][4];
 
 /////////////////////////// Keypad parameters ///////////////////////////
 // our keypad has four rows and three columns. since this will never change
@@ -100,8 +105,13 @@ char daysOfTheWeek[7][4] =
   {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 // declare type for a few RTC-related global variables
-int RTC_hour, RTC_minute, RTC_second;
-int RTC_year, RTC_month, RTC_day_of_month;
+int RTC_second;
+int RTC_day_of_month;
+int RTC_day, RTC_month, RTC_year;
+int GPS_day, GPS_month, GPS_year;
+int GPS_minute, GPS_second, GPS_millisecond;
+bool GPS_got_satellites;
+int RTC_hour, RTC_minute, RTC_seconds, RTC_milliseconds;
 
 // used for time interval calculatino for measurement
 unsigned long startMillis;
@@ -110,6 +120,9 @@ const unsigned long period = 100;
 
 // have we already set the RTC clock from the GPS?
 bool already_set_RTC_from_GPS;
+
+int GPS_PPS_pin = 43;
+
    
 /////////////////////////////// GPS parameters /////////////////////////////
 // Set GPSECHO1 and GPSECHO2 to 'false' to turn off echoing the GPS data to the Serial console
@@ -142,6 +155,27 @@ Adafruit_GPS GPS(&GPSSerial);
 #define GPSMAXLENGTH 120
 // or shorter than this:
 #define GPSMINLENGTH 55
+
+// declare variables which we'll use to store the value (0 or 1). 
+int GPS_PPS_value, GPS_PPS_value_old;
+
+// define some time variables.
+unsigned long  time_ms_GPS_PPS_last_changed, time_ms_new_GPS_available;
+unsigned long  time_ms_parsable_GPS_available;
+unsigned long  time_ms_finished_parsing_GPS_sentence;
+unsigned long  time_ms_GPS_PPS_last_became_1;
+unsigned long  time_ms_bumped_RTC_time_ready;
+unsigned long  time_ms_returned_from_RTC_setting;
+
+// keep track of whether or not we have set the RTC using satellite-informed GPS data
+bool good_RTC_time_from_GPS_and_satellites;
+
+// flag when we have set the RTC using the GPS clock, but without considering whether
+// the GPS has just updated its own clock from the satellite system
+bool good_RTC_time_from_GPS_not_considering_satellites;
+
+// flag to see if we've read a time from the GPS clock
+bool have_read_GPS_clock;
 
 // last sentence read from the GPS:
 char* GPS_sentence;
@@ -276,6 +310,13 @@ float GPS_altitude;
 int GPS_ready = -1;
 //end of GPS variables.
 
+//Personal variables.
+int testInterval;
+char the_key;
+
+// a diagnostic print flag
+bool debug_echo = false;
+
 void setup() {
   Serial.begin(115200);
   while (!Serial);
@@ -289,101 +330,105 @@ void setup() {
   // delay a bit so I have time to see the display.
   delay(1000);
   
-////////////////////////////////// GPS setup //////////////////////////////
-/*
-  // If you want to see a detailed report of the GPS information, open a serial 
-  // monitor window by going to the Tools -> Serial Monitor menu, then checking
-  // the Autoscroll box at the bottom left of the window, and setting the baud rate
-  // to 115200 baud.
+////////////////////////////////// GPS and RTC setup //////////////////////////////
 
-  // once we've set up the GPS it will free-run: it has its own built-in microprocessor.
-     
-  // 9600 NMEA is the default communication and baud rate for Adafruit MTK GPS units. 
-  // NMEA is "National Marine Electronics Association." 
-  // Note that this serial communication path is different from the one driving the serial 
-  // monitor window on your laptop, which should be running at 115,200 baud.
+  // fire up the DS3231 real time clock breakout board.
+  rtc.begin();
+  
+  // the following line sets the RTC to the date & time this sketch was compiled.
+  // It'll lag behind the true (local) time by a few seconds. Uncomment it if you
+  // want to do this. (This program sets the RTC to UTC.)
+  // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+
+  // fire up the serial monitor
+  Serial.begin(115200);
+
+  // initialize some time variables
+  GPS_hour = 0;
+  GPS_minute = 0;
+  GPS_seconds = 0;
+  GPS_milliseconds = 0;
+  GPS_day = 0;
+  GPS_month = 0;
+  GPS_year = 0;
+  GPS_got_satellites = false;
+
+  RTC_hour = 0;
+  RTC_minute = 0;
+  RTC_seconds = 0;
+  RTC_milliseconds = 0;
+  RTC_day = 0;
+  RTC_month = 0;
+  RTC_year = 0;
+
+  // initialize whether or not we have set the RTC using satellite-informed GPS data
+  good_RTC_time_from_GPS_and_satellites = false;
+
+// initialize whether or not we have set the RTC using the GPS clock, but without considering whether
+// the GPS has just updated its own click from the satellite system
+  good_RTC_time_from_GPS_not_considering_satellites = false;
+
+  // initialize a flag indicating if we've read a time from the GPS clock
+  have_read_GPS_clock = false;
+
+  // declare the GPS PPS pin to be an Arduino input 
+  pinMode(GPS_PPS_pin, INPUT);
+
+  // read the GPS PPS pin status.
+  GPS_PPS_value_old = digitalRead(GPS_PPS_pin);
+  
+  // 9600 NMEA is the default baud rate for Adafruit MTK GPS's. Note that this 
+  // is different from the baud rate for writing to your laptop's serial monitor window.
   GPS.begin(9600);
   
-  // turn on RMC (recommended minimum) and GGA (fix data, including altitude)
+  // uncomment this line to turn on RMC (recommended minimum) and GGA (fix data) including altitude
   // GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
   
-  // uncomment this line to turn on only the "minimum recommended" data:
+  // uncomment this line to turn on only the "minimum recommended" data
   GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCONLY);
   
-  // Set the update rate to once per second. Faster than this might make it hard for
-  // the serial communication line to keep up. You'll want to check that the 
-  // faster read rates work reliably for you before using them. 
+  // Set the update rate to once per second
+  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
 
-  // what the heck... let's try 5 Hz.
-  // GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ); 
-  // GPS.sendCommand(PMTK_SET_NMEA_UPDATE_2HZ); 
-  // GPS.sendCommand(PMTK_SET_NMEA_UPDATE_5HZ); 
-  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_10HZ); 
-  
-  // Request updates on antenna status, comment out to keep quiet.
-  // GPS.sendCommand(PGCMD_ANTENNA);
+  // set up the LCD's number of columns and rows:
+  lcd.begin(16, 2);
 
-  // Ask for firmware version, write this to the serial monitor. Comment out to keep quiet.
-  // GPSSerial.println(PMTK_Q_RELEASE);
-  // Serial.println(GPS_date_string);
-  Serial.println("Waiting for GPS...");
-  while (GPS_ready != 0) {
-    GPS_ready = GPS_query();
-  }
-  Serial.println("GPS_ready");
-  delay(100);
-  // end of GPS setup
-*/
-/////////////////////////// DS3231 real time clock  setup /////////////////////////
-  // turn on the RTC and check that it is talking to us.
-  if (!rtc.begin()) {
-    // uh oh, it's not talking to us.
-    LCD_message("DS3231 RTC", "unresponsive");
-    // delay 5 seconds so that user can read the display
-    delay(5000);  
+  // Print a message to the LCD.
+  lcd.setCursor(0, 0);
+  lcd.print("Now looking for ");
+  lcd.setCursor(0, 1);
+  lcd.print("GPS satellites  ");
 
-  } else {
-    if (rtc.lostPower()) {
-      LCD_message("DS3231 RTC lost", "power. Set to...");
-      // Set the RTC with an explicit date & time: September 1, 1988, 7:37:00 am
-      rtc.adjust(DateTime(2018, 10, 2, 7, 37, 0));
-    }
-  } 
+  // print a message to the serial monitor
+  DateTime now = rtc.now();
 
-  // if we have GPS data and haven't yet set the RTC, set the clock now.
-  if( (GPS_hour != 0 or GPS_minutes != 0 or GPS_seconds != 0 or GPS_milliseconds != 0) ) {
-
-    // we have something coming in from the GPS, and haven't yet set the real time 
-    // clock, so set the RTC now using the last data sentence from the GPS. This isn't
-    // the most accurate way to do it, but it ought to get us within a second of the
-    // correct time.
-
-    // To set the RTC with an explicit date & time: September 1, 1988, 7:37:00 am do this:
-    // rtc.adjust(DateTime(1988, 9, 1, 7, 37, 0));
-    RTC_year = 2018;
-    RTC_month = 10;
-    RTC_day_of_month = 9;
-    rtc.adjust(DateTime(RTC_year, RTC_month, RTC_day_of_month,
-                        GPS_hour, GPS_minutes, GPS_seconds));
-  }
-  now = rtc.now();
   LCD_message("RTC setup done","");
   Serial.println("RTC done");
   delay(500);
   //end of clock set up  
 
 /////////////////////////// BME setup /////////////////////////
-  if (!bme.begin()) {
+  /*if (!bme.begin()) {
     Serial.println("Could not find a valid BME680 sensor, check wiring!");
+    LCD_message("BME problem", "# to restart");
     delay(100);
-    exit(0);
-  }
+    while(true) {
+      if (kpd.getKeys() && kpd.key[0].kstate == PRESSED) {
+        the_key =  kpd.key[0].kchar;
+        if (the_key == '#') {
+          setup();
+          break;
+        }
+      }
+    }
+  }*/
+  bme.begin();
   // Set up oversampling and filter initialization
-  bme.setTemperatureOversampling(BME680_OS_8X);
-  bme.setHumidityOversampling(BME680_OS_2X);
-  bme.setPressureOversampling(BME680_OS_4X);
-  bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
-  bme.setGasHeater(320, 150); // 320*C for 150 ms
+  bme.setTemperatureOversampling(BME680_OS_1X);
+  bme.setHumidityOversampling(BME680_OS_1X);
+  bme.setPressureOversampling(BME680_OS_1X);
+  bme.setIIRFilterSize(BME680_FILTER_SIZE_0);
+  bme.setGasHeater(0,0); // 320*C for 150 ms
   LCD_message("BME setup done","");
   Serial.println("BME done");
 
@@ -397,14 +442,20 @@ void setup() {
   // fire up the SD file system object and check that all is fine so far.
   if (!SD.begin(SD_CS_PIN)) {
     Serial.println("SD initialization failed!");
+    LCD_message("Plug in SD!","");
     // delay a bit to give the serial port time, then bail out...
     delay(100);
-    exit(0);
+    while(true) {
+      if(SD.begin(SD_CS_PIN)) {
+        break;
+      }
+    }
   }
   Serial.println("SD initialization done.");
+  LCD_message("SD done","");
 
   // if the SD file exists already, delete it.
-  if(SD.exists(filename)) { 
+  if(SD.exists(filename)) {
     SD.remove(filename); 
         
     // wait a bit just to make sure we're finished with the file remove
@@ -429,25 +480,492 @@ void setup() {
     // delay a bit to give the serial port time to display the message...
     delay(100);
   }
-  startMillis = millis();
-  LCD_message("Start","measurement");
-  Serial.println("measurement started");
-  delay(500);
   //end of SD setup
+  LCD_message("Press #","to Start");
+  Serial.println("Press # to start");
+  //Start the measurement on '#' press.
+  while (true) {
+    if (kpd.getKeys() && kpd.key[0].kstate == PRESSED) {
+      the_key =  kpd.key[0].kchar;
+      if (the_key == '#') {
+        //GPS_query();
+        //rtc.adjust(DateTime(RTC_year, RTC_month, RTC_day_of_month,
+                            //GPS_hour, GPS_minutes, GPS_seconds));
+        //timeCounter = GPS_milliseconds;
+        //delay(1000-timeCounter);
+        timeCounter = 0;
+        startMillis = millis();
+        LCD_message("Measuring...","");
+        Serial.println("measurement started");
+        break;
+      }
+    }
+  }
+
 
 }
 
 void loop() {
-  int testInterval;
-  char the_key;
-  // self-explanatory
+
+    // self-explanatory
   if (!bme.performReading()) {
     myFile.println("Failed to perform reading :(");
     Serial.println("Failed to perform reading :(");
-    LCD_message("BME","not working.");
     myFile.close();
-    exit(0);
+    LCD_message("BME problem", "# to restart");
+    delay(100);
+    while(true) {
+      if (kpd.getKeys() && kpd.key[0].kstate == PRESSED) {
+        the_key =  kpd.key[0].kchar;
+        if (the_key == '#') {
+          setup();
+          break;
+        }
+      }
+    }
   }
+
+  if (good_RTC_time_from_GPS_and_satellites) {
+
+    //Serial.println(">>=-> Satellite-informed GPS clock loaded into RTC so we're done.");
+
+    //Serial.print("Delay between GPS PPS 0 -> 1 transition and RTC accepting new setting (ms) = ");
+    //Serial.println(time_ms_returned_from_RTC_setting - time_ms_GPS_PPS_last_became_1, DEC);
+
+    //Serial.print("Current RTC reading (UTC): ");
+
+    DateTime now = rtc.now();
+    /*Serial.print(now.year(), DEC);
+    Serial.print('/');
+    if(now.month() < 10) Serial.print(0);
+    Serial.print(now.month(), DEC);
+    Serial.print('/');
+    if(now.day() < 10) Serial.print(0);
+    Serial.print(now.day(), DEC);
+    Serial.print(" (");
+    Serial.print(daysOfTheWeek[now.dayOfTheWeek()]);
+    Serial.print(") ");
+    if(now.hour() < 10) Serial.print(0);
+    Serial.print(now.hour(), DEC);
+    Serial.print(':');
+    if(now.minute() < 10) Serial.print(0);
+    Serial.print(now.minute(), DEC);
+    Serial.print(':');
+    if(now.second() < 10) Serial.print(0);
+    Serial.print(now.second(), DEC);
+    Serial.println();*/
+
+    // set the LCD cursor to column 0, line 0 and then display the latitude/longitude.
+    /*lcd.setCursor(0, 0);
+    lcd.print("!Lat "), lcd.print(GPS.latitude, 4); lcd.print(" "); lcd.print(GPS.lat); 
+    lcd.setCursor(0, 1);
+    lcd.print("!Lon "), lcd.print(GPS.longitude, 4); lcd.print(" "); lcd.print(GPS.lon);
+
+    delay(1000);
+
+    lcd.setCursor(0, 0);
+    lcd.print(now.year(), DEC);
+    lcd.print('/');
+    if(now.month() < 10) lcd.print(0);
+    lcd.print(now.month(), DEC);
+    lcd.print('/');
+    if(now.day() < 10) lcd.print(0);
+    lcd.print(now.day(), DEC);
+    lcd.print(" ");
+    lcd.print(daysOfTheWeek[now.dayOfTheWeek()]);
+
+    lcd.setCursor(0, 1);
+    if(now.hour() < 10) lcd.print(0);
+    lcd.print(now.hour(), DEC);
+    lcd.print(':');
+    if(now.minute() < 10) lcd.print(0);
+    lcd.print(now.minute(), DEC);
+    lcd.print(':');
+    if(now.second() < 10) lcd.print(0);
+    lcd.print(now.second(), DEC);
+    lcd.print(" UTC           ");
+
+    while (good_RTC_time_from_GPS_and_satellites) {
+
+      // let's just keep reading the RTC and displaying it to the LCD.
+      DateTime now = rtc.now();
+
+      lcd.setCursor(0, 0);
+      lcd.print(now.year(), DEC);
+      lcd.print('/');
+      if(now.month() < 10) lcd.print(0);
+      lcd.print(now.month(), DEC);
+      lcd.print('/');
+      if(now.day() < 10) lcd.print(0);
+      lcd.print(now.day(), DEC);
+      lcd.print(" ");
+      lcd.print(daysOfTheWeek[now.dayOfTheWeek()]);
+  
+      lcd.setCursor(0, 1);
+      if(now.hour() < 10) lcd.print(0);
+      lcd.print(now.hour(), DEC);
+      lcd.print(':');
+      if(now.minute() < 10) lcd.print(0);
+      lcd.print(now.minute(), DEC);
+      lcd.print(':');
+      if(now.second() < 10) lcd.print(0);
+      lcd.print(now.second(), DEC);
+      lcd.print(" UTC           ");
+  
+      delay(25);      
+    
+      }*/
+  }
+
+  // we get to here if we haven't already set the RTC to a satellite-informed GPS clock.
+  
+  // read and report the GPS PPS pin status.
+  GPS_PPS_value = digitalRead(GPS_PPS_pin);
+
+  if (GPS_PPS_value != GPS_PPS_value_old) {
+
+    // here when the PPS pin has changed value.
+    time_ms_GPS_PPS_last_changed = millis();
+
+    // update the PPS value...
+    GPS_PPS_value_old = GPS_PPS_value;
+
+    // if the PPS pin has become 1, the GPS clock has just advanced to the next second.
+    
+    if (GPS_PPS_value == 1) {
+
+      // The GPS clock values obtained the last time a full "sentence" was received will 
+      // have arrived BEFORE the PPS pin changed state just now. 
+
+      time_ms_GPS_PPS_last_became_1 = time_ms_GPS_PPS_last_changed;
+
+      // now set the real time clock to the bumped-by-one-second value that we have already calculated.
+      // See the  code a few dozen lines below. To set the RTC with an explicit date & time, for example 
+      // January 21, 2014 at 3am you would call
+      // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+      
+      rtc.adjust(DateTime(2000 + RTC_year, RTC_month, RTC_day, RTC_hour, RTC_minute, RTC_seconds));
+
+      // take note of when we're back from setting the real time clock:
+      time_ms_returned_from_RTC_setting = millis();
+
+      // also set a pair of flags...
+      good_RTC_time_from_GPS_not_considering_satellites = true;
+      good_RTC_time_from_GPS_and_satellites = GPS_got_satellites;
+      
+      if (debug_echo) {
+        Serial.print("\nGPS_PPS_value just changed to 1 at t = ");
+        Serial.println(time_ms_GPS_PPS_last_became_1); 
+
+        Serial.print("Previous GPS time parsed from a data sentence: ");
+        Serial.print(GPS_hour, DEC); Serial.print(':');
+        Serial.print(GPS_minute, DEC); Serial.print(':');
+        Serial.print(GPS_seconds, DEC); Serial.print('.');
+        Serial.print(GPS_milliseconds);
+        
+        Serial.print("   Date (dd/mm/yyyy): ");
+        Serial.print(GPS_day, DEC); Serial.print('/');
+        Serial.print(GPS_month, DEC); Serial.print("/20");
+        Serial.println(GPS_year, DEC);
+
+        // now read the RTC value to check that the DS3231 took it:
+        DateTime now = rtc.now();
+      
+        Serial.println("Just set the RTC. Now read it back to make sure it took it.");
+        Serial.print(now.year(), DEC);
+        Serial.print('/');
+        Serial.print(now.month(), DEC);
+        Serial.print('/');
+        Serial.print(now.day(), DEC);
+        Serial.print(" (");
+        Serial.print(daysOfTheWeek[now.dayOfTheWeek()]);
+        Serial.print(") ");
+        Serial.print(now.hour(), DEC);
+        Serial.print(':');
+        Serial.print(now.minute(), DEC);
+        Serial.print(':');
+        Serial.print(now.second(), DEC);
+        Serial.println();
+  
+        Serial.print("time between GPS_PPS 0 -> 1 and return from RTC setting (ms) = ");
+        Serial.println(time_ms_returned_from_RTC_setting - time_ms_GPS_PPS_last_became_1, DEC);
+
+      }
+    }
+  }
+
+  // *******************************************************************************
+  // we're now finished dealing with the GPS PPS pin changing state. 
+  // *******************************************************************************
+
+  // *******************************************************************************
+  // read data from the GPS; do this one character per pass through function loop.
+  // we do this to keep the GPS data buffer from overflowing.
+  // *******************************************************************************
+  
+  char c = GPS.read();
+  
+  // if a complete sentence has been received, we can parse it...
+  if (GPS.newNMEAreceived()) {
+
+    time_ms_new_GPS_available = millis();
+
+    if (debug_echo) {
+      Serial.print("GPS.newNMEAreceived() true at t = ");
+      Serial.println(time_ms_new_GPS_available); 
+    }
+  
+    // if we fail to parse the sentence we should just bail out. We'll reenter loop and
+    // read the next character. We'll keep doing this until the parsing code decides we
+    // have an entire, parsable data sentence.
+    if (!GPS.parse(GPS.lastNMEA())) return; 
+
+    // we get to here when we have just finished reading a complete, parsable GPS sentence.
+    time_ms_parsable_GPS_available = millis();
+
+    // uptake the GPS date/time information. These were set by the GPS.parse command, above.  
+    GPS_hour = GPS.hour;
+    GPS_minute = GPS.minute;
+    GPS_seconds = GPS.seconds;
+    GPS_milliseconds = GPS.milliseconds;
+    GPS_day = GPS.day;
+    GPS_month = GPS.month;
+    GPS_year = GPS.year;
+
+    time_ms_finished_parsing_GPS_sentence = millis();
+
+    // set a flag so we know that we've read the GPS clock
+    have_read_GPS_clock = true;
+    
+    if (GPS.fix) {
+      GPS_got_satellites = true;
+      }else{
+      GPS_got_satellites = false;
+      }
+
+    /*
+      // debugging stuff to check the roll-overs...
+      Serial.println("debugging...");
+      GPS_hour = 23;
+      GPS_minute = 59;
+      GPS_seconds = 59;
+      GPS_day = 28;
+      GPS_month = 2;
+      GPS_year = 20;
+*/    
+
+    ///////////////////////////// for debugging ////////////////////////////
+
+    if (debug_echo) {
+      Serial.print("GPS.parse true at t = ");
+      Serial.println(time_ms_parsable_GPS_available, DEC); 
+      
+      Serial.print("The new GPS data time = ");
+      Serial.print(GPS_hour, DEC); Serial.print(':');
+      Serial.print(GPS_minute, DEC); Serial.print(':');
+      Serial.print(GPS_seconds, DEC); Serial.print('.');
+      Serial.print(GPS_milliseconds);
+
+      Serial.print(" Date (dd/mm/yyyy) = ");
+      Serial.print(GPS_day, DEC); Serial.print('/');
+      Serial.print(GPS_month, DEC); Serial.print("/20");
+      Serial.println(GPS_year, DEC);
+
+      Serial.print("Finished parsing the above time/date and loading into variables at t = "); 
+      Serial.println(time_ms_finished_parsing_GPS_sentence);
+    
+      Serial.print("Satellite fix? (yes/no is 1/0) "); Serial.println((int)GPS.fix);
+
+      if (GPS.fix) {
+        Serial.print("Location: ");
+        Serial.print(GPS.latitude, 4); Serial.print(GPS.lat);
+        Serial.print(", ");
+        Serial.print(GPS.longitude, 4); Serial.println(GPS.lon);
+  
+        // set the LCD cursor to column 0, line 0
+        lcd.setCursor(0, 0);
+        lcd.print("Lat. "), lcd.print(GPS.latitude, 4); lcd.print(" "); lcd.print(GPS.lat); 
+        lcd.setCursor(0, 1);
+        lcd.print("Lon. "), lcd.print(GPS.longitude, 4); lcd.print(" "); lcd.print(GPS.lon);
+  
+        }else{
+  
+        Serial.println("No satellite data yet.");
+        lcd.setCursor(0, 0);
+        lcd.print("still looking   ");
+        lcd.setCursor(0, 1);
+        lcd.print("for  satellites ");
+      
+      }
+    }     // end of debug_echo if block
+
+    ///////////////////////////////////////////////////////////////////
+
+    // now that we have a newly parsed GPS-based time, add one second to it for later use, as soon
+    // as the PPS pin goes positive. Note that we're going to need to handle roll-overs from 59 
+    // seconds to 0, and so forth.
+
+      bool bump_flag;
+      int place_holder;
+      
+      RTC_milliseconds = 0;
+      RTC_seconds = GPS_seconds + 1;
+
+      // use "place_holder" this way so the timings through the two branches of the if blocks 
+      // are the same
+      place_holder = GPS_seconds + 1;
+      
+      if(int(RTC_seconds) >= 60) {
+        bump_flag = true;
+        RTC_seconds = 0;
+        }else{
+        bump_flag = false;
+        RTC_seconds = place_holder;
+        }
+        
+      place_holder = GPS_minute + 1;
+      
+      // do we also need to bump the minutes?  
+      if (bump_flag) {
+        RTC_minute = place_holder;
+        }else{
+        RTC_minute = GPS_minute;
+        }
+
+      // again, do this to equalize the time through the two branches of the if block
+      place_holder = RTC_minute;
+      
+      if(int(RTC_minute) >= 60) {
+        bump_flag = true;
+        RTC_minute = 0;
+        }else{
+        bump_flag = false;
+        RTC_minute = place_holder;
+        }
+
+      place_holder = GPS_hour + 1;
+      
+      // do we also need to bump the hours?  
+      if (bump_flag) {
+        RTC_hour = place_holder;
+        }else{
+        RTC_hour = GPS_hour;
+        }
+
+      place_holder = RTC_hour;
+
+      if(int(RTC_hour) >= 24) {
+        bump_flag = true;
+        RTC_hour = 0;
+        }else{
+        bump_flag = false;
+        RTC_hour = place_holder;
+        }
+
+      place_holder = GPS_day + 1;
+      
+      // do we also need to bump the days?  
+      if (bump_flag) {
+        RTC_day = place_holder;
+        }else{
+        RTC_day = GPS_day;
+        }
+
+      // do we need to bump the month too? Note the stuff I do to make both paths
+      // through the if blocks take the same amount of execution time.
+      
+      int nobody_home;
+      int days_in_month = 31;
+
+      // 30 days hath September, April, June, and November...
+      if (int(GPS_month) == 9 || int(GPS_month) == 4 || int(GPS_month) == 6 || int(GPS_month) == 11) {
+        days_in_month = 30;
+      }else{
+        nobody_home = 99;
+      }
+        
+      // ...all the rest have 31, except February...
+      if (int(GPS_month) == 2 && (int(GPS_year) % 4)) {
+        days_in_month = 28;
+      }else{
+        nobody_home = 99;
+      }
+      
+      // ...leap year!
+      if (int(GPS_month) == 2 && !(int(GPS_year) % 4)) {
+        days_in_month = 29;
+      }else{
+        nobody_home = 99;
+      }
+
+      place_holder = RTC_day;
+      
+      if(int(RTC_day) > days_in_month) {
+        bump_flag = true;
+        RTC_day = 1;
+        }else{
+        bump_flag = false;
+        RTC_day = place_holder;
+        }
+
+      if (bump_flag) {
+        RTC_month = GPS_month + 1;
+        }else{
+        RTC_month = GPS_month;
+        }
+
+      place_holder = RTC_month;
+                
+      //... and also bump the year?
+      
+      if(int(RTC_month) > 12) {
+        bump_flag = true;
+        RTC_month = 1;
+        }else{
+        bump_flag = false;
+        RTC_month = place_holder;
+        }
+
+      if (bump_flag) {
+        RTC_year = GPS_year + 1;
+        }else{
+        RTC_year = GPS_year;
+        }
+
+      // keep track of when we have the proposed RTC time value ready for loading
+      time_ms_bumped_RTC_time_ready = millis();
+
+      if (debug_echo) {
+        // now print the newly bumped time:
+        Serial.print("Now have a proposed (1 second bumped) time ready at (ms) ");
+        Serial.println(time_ms_bumped_RTC_time_ready, DEC);       
+        Serial.print("Proposed (1 second bumped) time: ");
+        Serial.print(RTC_hour, DEC); Serial.print(':');
+        Serial.print(RTC_minute, DEC); Serial.print(':');
+        Serial.print(RTC_seconds, DEC); Serial.print('.');
+        Serial.print(RTC_milliseconds);
+        Serial.print("   Date (dd/mm/yyyy): ");
+        Serial.print(RTC_day, DEC); Serial.print('/');
+        Serial.print(RTC_month, DEC); Serial.print("/20");
+        Serial.println(RTC_year, DEC);
+      }
+    
+  }       // end of GPS.newNMEAreceived if block
+
+
+  sensorValue = analogRead(analogInPin);
+  sensorVoltage = sensorValue * .004882814; // Convert from 0...1024 to 0...5v
+  //windSpeed = seonsorVoltage / 5 * 32.4;
+  /*Serial.print("Sensor Value: ");
+  Serial.print(sensorValue);
+  Serial.print("\t");
+  Serial.print("Sensor Voltage: ");
+  Serial.print(sensorVoltage);*/
+  /*unsigned long endTime = bme.beginReading();
+  testInterval = endTime - millis();
+  Serial.println(testInterval);
+  bme.endReading();
+  delay(500);*/
 
   // Test GPS
   // Serial.print("\nGPS_hour (UTC) = "); Serial.print(GPS_hour); 
@@ -471,6 +989,7 @@ void loop() {
     currentMillis = millis();
     if (currentMillis - startMillis >= period) {
       testInterval = currentMillis - startMillis;
+      timeCounter += testInterval;
       startMillis = currentMillis;
       break;
     }
@@ -483,25 +1002,25 @@ void loop() {
   myFile.print(RTC_hour); myFile.print(',');
   myFile.print(RTC_minute); myFile.print(',');
   myFile.print(RTC_second); myFile.print(',');
-  myFile.println(millis() % 1000);
+  //myFile.println(timeCounter % 1000);
+  myFile.print(RTC_milliseconds);
 
-  //dataBuffer[0][0] = RTC_hour;
-  //dataBuffer[0][1] = RTC_minute;
-  //dataBuffer[0][2] = RTC_second;
-  //dataBuffer[0][3] = testInterval;
   //myFile.println(testInterval);
-  //myFile.flush();
 
   // Write BME data. temperature in °C, pressure in hPa, humidity in %, altitude in m
   myFile.print(bme.temperature);
   myFile.print(",");
   myFile.print(bme.pressure / 100.0);
   myFile.print(",");
-  myFile.print(bme.humidity);
-  myFile.print(",");
+  myFile.println(bme.humidity);
+  //myFile.print(",");
   //myFile.println(bme.readAltitude(SEALEVELPRESSURE_HPA));
+
+  // Write Anemometer voltage in V.
+  myFile.println(sensorVoltage);
+
   myFile.println();
-  //myFile.flush();
+  myFile.flush();
 
   // To stop recording data if * was pressed
   if (kpd.getKeys() && kpd.key[0].kstate == PRESSED) {
@@ -511,9 +1030,17 @@ void loop() {
       myFile.println("Data acquisition stopped from keyboard");
       myFile.flush();
       myFile.close();
-      LCD_message("Stopped", "from keyboard");
+      LCD_message("Stopped", "# to restart");
       delay(100);
-      exit(0);
+      while(true) {
+        if (kpd.getKeys() && kpd.key[0].kstate == PRESSED) {
+          the_key =  kpd.key[0].kchar;
+          if (the_key == '#') {
+            setup();
+            break;
+          }
+        }
+      }
     }
   }
 
