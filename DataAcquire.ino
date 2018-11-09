@@ -954,7 +954,7 @@ void loop() {
 
 
   sensorValue = analogRead(analogInPin);
-  sensorVoltage = sensorValue; // Convert from 0...1024 to 0...5v
+  sensorVoltage = sensorValue * 2.0 / 1023.0; // Convert from 0...1024 to 0...5v
   //windSpeed = seonsorVoltage / 5 * 32.4;
   /*Serial.print("Sensor Value: ");
   Serial.print(sensorValue);
