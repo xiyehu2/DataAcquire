@@ -954,7 +954,7 @@ void loop() {
 
 
   sensorValue = analogRead(analogInPin);
-  sensorVoltage = sensorValue * .004882814; // Convert from 0...1024 to 0...5v
+  sensorVoltage = sensorValue; // Convert from 0...1024 to 0...5v
   //windSpeed = seonsorVoltage / 5 * 32.4;
   /*Serial.print("Sensor Value: ");
   Serial.print(sensorValue);
@@ -1003,7 +1003,7 @@ void loop() {
   myFile.print(RTC_minute); myFile.print(',');
   myFile.print(RTC_second); myFile.print(',');
   //myFile.println(timeCounter % 1000);
-  myFile.print(RTC_milliseconds);
+  myFile.println(RTC_milliseconds);
 
   //myFile.println(testInterval);
 
