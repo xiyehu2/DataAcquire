@@ -984,16 +984,6 @@ void loop() {
   // Serial.print("   RTC_second = "); Serial.println(rtc.now().second());
   // delay(500);
   
-  // this is to make sure measurements are taking in 100ms intervals. Period = 100ms.
-  while (true) {
-    currentMillis = millis();
-    if (currentMillis - startMillis >= period) {
-      testInterval = currentMillis - startMillis;
-      timeCounter += testInterval;
-      startMillis = currentMillis;
-      break;
-    }
-  }
   // Write time data
   //myFile.println(currentMillis % 1000);
   RTC_hour = rtc.now().hour();
@@ -1021,6 +1011,18 @@ void loop() {
 
   myFile.println();
   myFile.flush();
+
+  // this is to make sure measurements are taking in 100ms intervals. Period = 100ms.
+  while (true) {
+    currentMillis = millis();
+    if (currentMillis - startMillis >= period) {
+      testInterval = currentMillis - startMillis;
+      timeCounter += testInterval;
+      startMillis = currentMillis;
+      break;
+    }
+  }
+
 
   // To stop recording data if * was pressed
   if (kpd.getKeys() && kpd.key[0].kstate == PRESSED) {
