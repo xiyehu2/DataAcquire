@@ -1003,7 +1003,7 @@ void loop() {
   myFile.print(RTC_minute); myFile.print(',');
   myFile.print(RTC_second); myFile.print(',');
   //myFile.println(timeCounter % 1000);
-  myFile.println(RTC_milliseconds);
+  myFile.println(GPS_milliseconds);
 
   //myFile.println(testInterval);
 
