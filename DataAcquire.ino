@@ -488,11 +488,11 @@ void setup() {
     if (kpd.getKeys() && kpd.key[0].kstate == PRESSED) {
       the_key =  kpd.key[0].kchar;
       if (the_key == '#') {
-        //GPS_query();
-        //rtc.adjust(DateTime(RTC_year, RTC_month, RTC_day_of_month,
-                            //GPS_hour, GPS_minutes, GPS_seconds));
-        //timeCounter = GPS_milliseconds;
-        //delay(1000-timeCounter);
+        GPS_query();
+        rtc.adjust(DateTime(RTC_year, RTC_month, RTC_day_of_month,
+                            GPS_hour, GPS_minutes, GPS_seconds));
+        timeCounter = GPS_milliseconds;
+        delay(1000-timeCounter);
         timeCounter = 0;
         startMillis = millis();
         LCD_message("Measuring...","");
@@ -986,14 +986,15 @@ void loop() {
   
   // Write time data
   //myFile.println(currentMillis % 1000);
+  //GPS_query();
   RTC_hour = rtc.now().hour();
   RTC_minute = rtc.now().minute();
   RTC_second = rtc.now().second();
   myFile.print(RTC_hour); myFile.print(',');
   myFile.print(RTC_minute); myFile.print(',');
   myFile.print(RTC_second); myFile.print(',');
-  //myFile.println(timeCounter % 1000);
-  myFile.println(GPS_milliseconds);
+  myFile.println(timeCounter % 1000);
+  //myFile.println(GPS_milliseconds);
 
   //myFile.println(testInterval);
 
