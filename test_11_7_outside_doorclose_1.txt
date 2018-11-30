@@ -1,7 +1,6 @@
-Data written below has such format:
+﻿Data written below has such format:
 hour(UTC), minute, second, millisecond
-Temperature(°C), pressure(hPa), humidity(%)
-Anemometer output voltage
+Temperature(°C), pressure(hPa), humidity(%), altitude(m)
 
 4,34,46,0
 3.26,994.32,82.95
