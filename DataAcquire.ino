@@ -55,7 +55,7 @@ char filename[ ] = "bme_and_time_data.txt";
 // instantiate a file system object
 SdFat SD;
 // used for file writing purposes, not related to the realtime clock.
-int timeCounter;
+unsigned long timeCounter;
 char truncate[64];
 
 /////////////////////////// Keypad parameters ///////////////////////////
@@ -109,9 +109,9 @@ int RTC_second;
 int RTC_day_of_month;
 int RTC_day, RTC_month, RTC_year;
 int GPS_day, GPS_month, GPS_year;
-int GPS_minute, GPS_second, GPS_millisecond;
+unsigned long GPS_minute, GPS_second, GPS_millisecond;
 bool GPS_got_satellites;
-int RTC_hour, RTC_minute, RTC_seconds, RTC_milliseconds;
+unsigned long RTC_hour, RTC_minute, RTC_seconds, RTC_milliseconds;
 
 // used for time interval calculatino for measurement
 unsigned long startMillis;
@@ -954,7 +954,7 @@ void loop() {
 
 
   sensorValue = analogRead(analogInPin);
-  sensorVoltage = sensorValue * 2.0 / 1023.0; // Convert from 0...1024 to 0...5v
+  sensorVoltage = sensorValue * 2.0 / 1023.0; // Convert from 0...1024 to 0...2v
   //windSpeed = seonsorVoltage / 5 * 32.4;
   /*Serial.print("Sensor Value: ");
   Serial.print(sensorValue);
